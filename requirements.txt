@@ -1,26 +1,18 @@
-# VoiceSnap - Streamlit Cloud Deployment
-# Compatible with: uv pip install -r requirements.txt
-
-# Core Framework
 streamlit
 
-# HTTP & API
+# HTTP
 requests
 urllib3
 
-# Database & Authentication
-supabase
-postgrest-py
-realtime-py
-storage
-gotrue
+# Modern Supabase SDK
+supabase-py
 
-# Configuration & Environment
+# Config
 python-dotenv
 pydantic
 pydantic-settings
 
-# Google OAuth (Optional)
+# Google OAuth
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
@@ -29,7 +21,7 @@ google-auth-httplib2
 python-dateutil
 pytz
 
-# SSL/TLS & Security
+# SSL/Security
 certifi
 charset-normalizer
 idna
@@ -39,8 +31,3 @@ aiohttp
 aiosignal
 frozenlist
 multidict
-
-# Development (Optional - remove for production)
-# pytest==7.4.3
-# black==24.1.1
-# flake8==7.0.0
