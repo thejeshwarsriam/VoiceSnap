@@ -15,14 +15,6 @@ st.set_page_config(
 # CSS with ONLY the 5 fixes
 st.markdown("""
 <style>
-    /* FIX 1: Remove scrollbar on login screen */
-    .login-container {
-        height: 100vh;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
     
     /* FIX 3: All fonts black */
     h1, h2, h3, h4, h5, h6, p, div, span, label, .stMarkdown {
@@ -66,7 +58,7 @@ def render_login():
         st.markdown("""
         <div style="text-align: center;">
             <h1 style="font-size: 56px; margin: 0;">🎙️</h1>
-            <h1 style="font-size: 36px; margin: 10px 0;">VoiceSnap</h1>
+            <h2 style="font-size: 36px; margin: 1px 0;">VoiceSnap</h1>
             <p style="font-size: 16px; color: #666;">Real-time audio hangouts</p>
         </div>
         """, unsafe_allow_html=True)
