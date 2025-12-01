@@ -12,7 +12,7 @@ urllib3
 supabase
 postgrest-py
 realtime-py
-storage-py
+storage
 gotrue
 
 # Configuration & Environment
