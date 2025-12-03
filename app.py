@@ -1,8 +1,9 @@
 import streamlit as st
 import time
+from streamlit_google_auth import Authenticate
 from database import db
 from daily_api import daily
-from configurations import Config as config
+from config import config
 
 # Page config
 st.set_page_config(
@@ -12,26 +13,32 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# CSS with ONLY the 5 fixes
+# Clean CSS
 st.markdown("""
 <style>
-    
-    /* FIX 3: All fonts black */
-    h1, h2, h3, h4, h5, h6, p, div, span, label, .stMarkdown {
-        color: #000000 !important;
-    }
-    
-    /* Keep white background (default Streamlit) */
-    .stApp {
-        background: white;
-    }
-    
-    /* Search bar styling */
-    .search-bar {
-        margin: 20px 0;
-    }
+    .block-container {padding-top: 2rem; max-width: 1200px;}
+    .stApp {background: white;}
+    h1, h2, h3, h4, h5, h6, p, div, span, label {color: #000000 !important;}
+    .header-card {background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-bottom: 20px;}
+    .friend-card {background: #ffffff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px; margin: 8px 0; display: flex; align-items: center; justify-content: space-between;}
+    .friend-card:hover {box-shadow: 0 2px 8px rgba(0,0,0,0.1);}
+    .status-dot {width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 8px;}
+    .status-available {background: #22c55e;}
+    .status-busy {background: #ef4444;}
+    .status-offline {background: #9ca3af;}
+    .call-header {background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 20px;}
 </style>
 """, unsafe_allow_html=True)
+
+# Initialize Google OAuth
+@st.cache_resource
+def get_authenticator():
+    return Authenticate(
+        secret_credentials_path='google_credentials.json',
+        cookie_name='voicesnap_auth',
+        cookie_key='voicesnap_secret_key_12345',
+        redirect_uri=config.GOOGLE_REDIRECT_URI
+    )
 
 # Session state
 if 'user' not in st.session_state:
@@ -44,77 +51,112 @@ if 'room_url' not in st.session_state:
     st.session_state.room_url = None
 
 # ============================================================================
-# FIX 1: Login screen with no scrollbar
+# GOOGLE OAUTH LOGIN
 # ============================================================================
 
-def render_login():
-    """Login screen that fits in viewport without scrollbar"""
-    
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+def render_google_login():
+    """Google OAuth login screen"""
     
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
         st.markdown("""
-        <div style="text-align: center;">
+        <div style="text-align: center; padding: 50px 20px;">
             <h1 style="font-size: 56px; margin: 0;">🎙️</h1>
-            <h2 style="font-size: 36px; margin: 1px 0;">VoiceSnap</h1>
-            <p style="font-size: 16px; color: #666;">Real-time audio hangouts</p>
+            <h1 style="font-size: 36px; margin: 10px 0;">VoiceSnap</h1>
+            <p style="font-size: 16px; color: #666; margin-bottom: 40px;">
+                Real-time audio hangouts for friends
+            </p>
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="header-card">', unsafe_allow_html=True)
+        st.markdown("### 🔐 Sign in with Google")
+        st.caption("Secure authentication • No password needed")
         
-        name = st.text_input("👤 Your Name", placeholder="Rahul Kumar")
-        email = st.text_input("📧 Email", placeholder="your.email@gmail.com")
+        # Google Sign In Button
+        authenticator = get_authenticator()
+        user_info = authenticator.login()
         
-        if st.button("🚀 Start Hanging Out", use_container_width=True, type="primary"):
-            if name and email:
-                user = db.create_user(email, name)
+        if user_info:
+            # Extract Google profile info
+            email = user_info.get('email')
+            name = user_info.get('name', email.split('@')[0])
+            avatar_url = user_info.get('picture')
+            google_id = user_info.get('sub')
+            
+            # Create/update user in database
+            user = db.create_user(
+                email=email,
+                name=name,
+                google_id=google_id,
+                avatar_url=avatar_url
+            )
+            
+            if user:
                 st.session_state.user = user
+                st.success(f"✅ Welcome, {name}!")
+                time.sleep(1)
                 st.rerun()
-            else:
-                st.error("Please enter both name and email")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown("""
+        <p style="text-align: center; color: #666; font-size: 14px; margin-top: 20px;">
+            🔒 We only access your name, email, and profile photo<br>
+            ✅ No data sharing • No spam • 100% secure
+        </p>
+        """, unsafe_allow_html=True)
 
 # ============================================================================
-# FIX 2: Main interface with tabs for Friends and Groups
-# FIX 3: All fonts black (applied via CSS above)
-# FIX 4: Global search bar below "Hey, {name}"
+# MAIN INTERFACE WITH GLOBAL SEARCH
 # ============================================================================
 
 def render_main_interface():
-    """Main interface with all fixes applied"""
+    """Main interface after login"""
     
-    # Header with logout
+    # Header
     col1, col2 = st.columns([4, 1])
     
     with col1:
-        st.markdown(f"## 👋 Hey, {st.session_state.user['name']}!")
+        st.markdown(f"""
+        <div class="header-card">
+            <h2 style="margin: 0;">👋 Hey, {st.session_state.user['name']}!</h2>
+            <p style="margin: 5px 0 0 0; color: #666;">Ready to hang out?</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
         if st.button("🚪 Logout", use_container_width=True):
+            authenticator = get_authenticator()
+            authenticator.logout()
             st.session_state.user = None
             st.session_state.in_call = False
             st.rerun()
     
-    # FIX 4: Global search bar (below "Hey, {name}")
-    st.markdown('<div class="search-bar">', unsafe_allow_html=True)
+    # GLOBAL SEARCH BAR
+    st.markdown("### 🔍 Search Users Worldwide")
     search_query = st.text_input(
-        "🔍 Search users by name or email",
-        placeholder="Search for users...",
-        key="global_search"
+        "Search by name or email",
+        placeholder="Type name or email to find users...",
+        label_visibility="collapsed"
     )
-    st.markdown('</div>', unsafe_allow_html=True)
     
-    # Show search results if searching
-    if search_query and len(search_query) > 0:
-        render_search_results(search_query)
-        st.markdown("---")
+    # Search results
+    if search_query and len(search_query) > 2:
+        results = db.search_users(search_query, exclude_user_id=st.session_state.user['id'])
+        
+        if results:
+            st.markdown(f"**Found {len(results)} users:**")
+            for user in results:
+                render_search_result(user)
+        else:
+            st.info("No users found. Be the first to invite your friends!")
     
-    # FIX 2: Tabs for Friends and Groups
-    tab1, tab2 = st.tabs(["👥 Individual Friends", "🎯 Groups"])
+    st.markdown("---")
+    
+    # Tabs for Friends and Groups
+    tab1, tab2 = st.tabs(["👥 Friends", "🎯 Groups"])
     
     with tab1:
         render_friends_list()
@@ -122,109 +164,91 @@ def render_main_interface():
     with tab2:
         render_groups_list()
 
-# ============================================================================
-# FIX 4: Global search with instant connect
-# ============================================================================
-
-def render_search_results(query):
-    """Search users across network and allow instant connect"""
+def render_search_result(user):
+    """Render search result with instant call button"""
+    col1, col2, col3 = st.columns([1, 3, 2])
     
-    st.markdown("### 🔍 Search Results")
+    with col1:
+        st.image(user['avatar_url'], width=60)
     
-    # Mock search (replace with real database query in production)
-    all_users = [
-        {"id": 101, "name": "Arjun Patel", "email": "arjun@example.com", "status": "available"},
-        {"id": 102, "name": "Sneha Gupta", "email": "sneha@example.com", "status": "offline"},
-        {"id": 103, "name": "Vikram Singh", "email": "vikram@example.com", "status": "busy"},
-        {"id": 104, "name": "Ananya Sharma", "email": "ananya@example.com", "status": "available"},
-    ]
-    
-    # Filter by name or email
-    query_lower = query.lower()
-    results = [u for u in all_users if query_lower in u['name'].lower() or query_lower in u['email'].lower()]
-    
-    if not results:
-        st.info("No users found matching your search")
-        return
-    
-    # Display results with instant connect button
-    for user in results:
-        col1, col2, col3 = st.columns([1, 3, 2])
-        
-        with col1:
-            st.markdown(f"""
-            <div style="width: 50px; height: 50px; border-radius: 50%; background: linear-gradient(135deg, #667eea, #764ba2); 
-                        display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-                {user['name'][0]}
+    with col2:
+        status_class = f"status-{user.get('status', 'offline')}"
+        st.markdown(f"""
+        <div>
+            <div style="font-weight: 600; font-size: 16px;">{user['name']}</div>
+            <div style="font-size: 14px; color: #666;">
+                <span class="status-dot {status_class}"></span>{user['email']}
             </div>
-            """, unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        # Check if already friends
+        is_friend = db.is_friend(st.session_state.user['id'], user['id'])
         
-        with col2:
-            st.markdown(f"**{user['name']}**")
-            st.caption(user['email'])
-        
-        with col3:
-            if st.button("➕ Connect", key=f"connect_{user['id']}", use_container_width=True):
-                st.success(f"✅ Friend request sent to {user['name']}")
-                time.sleep(1)
-                st.rerun()
-
-# ============================================================================
-# Friends list (Tab 1)
-# ============================================================================
+        if is_friend:
+            # Can call directly
+            if user.get('status') == 'available':
+                if st.button("📞 Call Now", key=f"call_{user['id']}", use_container_width=True, type="primary"):
+                    start_call_with_user(user)
+            elif user.get('status') == 'busy':
+                if st.button("👥 Join Call", key=f"join_{user['id']}", use_container_width=True):
+                    join_user_call(user)
+            else:
+                st.button("💤 Offline", key=f"off_{user['id']}", disabled=True, use_container_width=True)
+        else:
+            # Add friend first
+            if st.button("➕ Add Friend", key=f"add_{user['id']}", use_container_width=True):
+                if db.add_friend(st.session_state.user['id'], user['email']):
+                    st.success(f"✅ Added {user['name']} as friend!")
+                    time.sleep(1)
+                    st.rerun()
 
 def render_friends_list():
-    """Individual friends list"""
-    
+    """Friends list"""
     st.markdown("### Your Friends")
     
-    friends = db.get_user_friends(st.session_state.user["id"])
+    friends = db.get_user_friends(st.session_state.user['id'])
     
     if not friends:
-        st.info("👥 No friends yet. Use the search bar above to find friends!")
+        st.info("👥 No friends yet. Use search above to find friends!")
         return
     
     for friend_data in friends:
-        friend = friend_data.get("friend", friend_data)
+        friend = friend_data['friend']
         
         col1, col2, col3 = st.columns([1, 3, 2])
         
         with col1:
-            avatar_url = friend.get("avatar_url", f"https://ui-avatars.com/api/?name={friend['name']}")
-            st.image(avatar_url, width=60)
+            st.image(friend['avatar_url'], width=60)
         
         with col2:
-            status = friend.get("status", "offline")
-            status_emoji = {"available": "🟢", "busy": "🔴", "offline": "⚪"}[status]
-            
-            st.markdown(f"**{friend['name']}**")
-            st.caption(f"{status_emoji} {status.capitalize()}")
+            status = friend.get('status', 'offline')
+            status_class = f"status-{status}"
+            st.markdown(f"""
+            <div>
+                <div style="font-weight: 600; font-size: 16px;">{friend['name']}</div>
+                <div style="font-size: 14px; color: #666;">
+                    <span class="status-dot {status_class}"></span>{status.capitalize()}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col3:
-            if status == "available":
-                if st.button("📞 Call", key=f"call_{friend['id']}", use_container_width=True):
-                    start_call([friend])
-            elif status == "busy":
-                if st.button("👥 Join", key=f"join_{friend['id']}", use_container_width=True):
-                    st.info("Joining their call...")
+            if status == 'available':
+                if st.button("📞 Call", key=f"fcall_{friend['id']}", use_container_width=True, type="primary"):
+                    start_call_with_user(friend)
+            elif status == 'busy':
+                if st.button("👥 Join", key=f"fjoin_{friend['id']}", use_container_width=True):
+                    join_user_call(friend)
             else:
-                st.button("💤 Offline", key=f"offline_{friend['id']}", disabled=True, use_container_width=True)
-
-# ============================================================================
-# Groups list (Tab 2)
-# ============================================================================
+                st.button("💤 Offline", key=f"foff_{friend['id']}", disabled=True, use_container_width=True)
 
 def render_groups_list():
     """Groups list"""
-    
     st.markdown("### Your Groups")
     
-    # Mock groups (replace with real data)
-    groups = [
-        {"id": 1, "name": "Study Squad", "members": 5, "active": True},
-        {"id": 2, "name": "Weekend Hangout", "members": 8, "active": False},
-        {"id": 3, "name": "Gaming Crew", "members": 12, "active": True},
-    ]
+    groups = db.get_user_groups(st.session_state.user['id'])
     
     if not groups:
         st.info("🎯 No groups yet")
@@ -242,65 +266,90 @@ def render_groups_list():
             """, unsafe_allow_html=True)
         
         with col2:
-            st.markdown(f"**{group['name']}**")
-            active_text = "🟢 Active" if group['active'] else "⚪ Inactive"
-            st.caption(f"{group['members']} members • {active_text}")
+            st.markdown(f"""
+            <div>
+                <div style="font-weight: 600; font-size: 16px;">{group['name']}</div>
+                <div style="font-size: 14px; color: #666;">{group.get('member_count', 0)} members</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col3:
-            if group['active']:
-                if st.button("👥 Join", key=f"join_group_{group['id']}", use_container_width=True):
-                    st.info(f"Joining {group['name']}...")
-            else:
-                if st.button("📞 Start", key=f"start_group_{group['id']}", use_container_width=True):
-                    st.info(f"Starting {group['name']}...")
-    
-    st.markdown("---")
-    if st.button("➕ Create New Group", use_container_width=True):
-        st.info("Group creation coming soon!")
+            if st.button("📞 Start Group Call", key=f"group_{group['id']}", use_container_width=True):
+                start_group_call(group)
 
 # ============================================================================
-# Call functions
+# CALL FUNCTIONS
 # ============================================================================
 
-def start_call(friends):
-    """Start a new call"""
-    with st.spinner("Creating room..."):
+def start_call_with_user(user):
+    """Start 1:1 call with a user"""
+    with st.spinner(f"Calling {user['name']}..."):
+        room = daily.create_room(max_participants=2)
+        
+        if room:
+            st.session_state.current_room = room['name']
+            st.session_state.room_url = room['url']
+            st.session_state.in_call = True
+            
+            # Update status
+            db.update_user_status(st.session_state.user['id'], 'busy', room['name'])
+            
+            st.rerun()
+
+def join_user_call(user):
+    """Join user's active call"""
+    if user.get('room_id'):
+        st.session_state.current_room = user['room_id']
+        st.session_state.room_url = f"https://{user['room_id']}.daily.co/{user['room_id']}"
+        st.session_state.in_call = True
+        
+        db.update_user_status(st.session_state.user['id'], 'busy', user['room_id'])
+        
+        st.rerun()
+
+def start_group_call(group):
+    """Start group call"""
+    with st.spinner(f"Starting {group['name']}..."):
         room = daily.create_room(max_participants=100)
         
         if room:
-            st.session_state.current_room = room["name"]
-            st.session_state.room_url = room["url"]
+            st.session_state.current_room = room['name']
+            st.session_state.room_url = room['url']
             st.session_state.in_call = True
+            
+            db.update_user_status(st.session_state.user['id'], 'busy', room['name'])
+            
             st.rerun()
 
 # ============================================================================
-# FIX 5: Call interface with auto-redirect to homepage
+# CALL INTERFACE
 # ============================================================================
 
 def render_call_interface():
-    """Call interface with auto-redirect on end"""
+    """Active call interface"""
     
-    # Header
-    st.markdown(f"""
-    ## 🎙️ Active Call
-    **Room:** `{st.session_state.current_room}`  
-    🔊 Audio-only mode
-    """)
+    # Header with end button
+    col1, col2 = st.columns([4, 1])
     
-    # End call button at the top
-    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        st.markdown(f"""
+        <div class="call-header">
+            <h3 style="margin: 0;">🎙️ Active Call</h3>
+            <p style="margin: 5px 0 0 0; color: #666;">Room: <code>{st.session_state.current_room}</code></p>
+            <p style="margin: 5px 0 0 0; color: #22c55e; font-size: 14px;">🔊 Audio-only mode</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        if st.button("📞 End Call & Return Home", use_container_width=True, type="primary"):
-            end_call_and_redirect()
-    
-    st.markdown("---")
+        if st.button("📞 End Call", use_container_width=True, type="primary"):
+            end_call()
     
     # Daily.co iframe
     if st.session_state.room_url:
         try:
             token = daily.create_meeting_token(
                 st.session_state.current_room,
-                st.session_state.user["name"],
+                st.session_state.user['name'],
                 is_owner=True
             )
         except:
@@ -315,39 +364,29 @@ def render_call_interface():
         <iframe
             src="{url}"
             allow="microphone; fullscreen"
-            style="width: 100%; height: 600px; border: none; border-radius: 10px;"
+            style="width: 100%; height: 600px; border: 1px solid #e0e0e0; border-radius: 12px;"
         ></iframe>
         """, unsafe_allow_html=True)
-    
-    st.success("✅ Audio-only mode active • No video")
-    
-    # Another end button at bottom
-    st.markdown("---")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("📞 End Call", use_container_width=True, type="primary", key="end_bottom"):
-            end_call_and_redirect()
+        
+        st.success("✅ Audio-only mode • No video • Crystal clear quality")
 
-# FIX 5: Auto-redirect function
-def end_call_and_redirect():
-    """End call and automatically redirect to homepage"""
-    
-    # Delete room
+def end_call():
+    """End call and return home"""
     try:
         daily.delete_room(st.session_state.current_room)
     except:
         pass
     
-    # Clear all call state
+    # Update status
+    db.update_user_status(st.session_state.user['id'], 'available', None)
+    
+    # Clear state
     st.session_state.in_call = False
     st.session_state.current_room = None
     st.session_state.room_url = None
     
-    # Show brief message
-    st.success("Call ended. Returning to homepage...")
+    st.success("Call ended. Returning home...")
     time.sleep(1)
-    
-    # Automatic redirect by rerunning
     st.rerun()
 
 # ============================================================================
@@ -360,13 +399,13 @@ def main():
         st.error("⚠️ Daily.co API key not configured!")
         st.stop()
     
-    # Route based on state
+    # Route
     if not st.session_state.user:
-        render_login()  # FIX 1: No scrollbar
+        render_google_login()
     elif st.session_state.in_call:
-        render_call_interface()  # FIX 5: Auto-redirect
+        render_call_interface()
     else:
-        render_main_interface()  # FIX 2, 3, 4: Tabs, black text, search
+        render_main_interface()
 
 if __name__ == "__main__":
     main()
