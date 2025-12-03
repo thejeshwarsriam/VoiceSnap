@@ -1,9 +1,12 @@
 import streamlit as st
 import time
-from streamlit_google_auth import Authenticate
+from authlib.integrations.requests_client import OAuth2Session
 from database import db
 from daily_api import daily
 from configurations import Config as config
+import os
+import json
+import requests
 
 # Page config
 st.set_page_config(
@@ -30,17 +33,50 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Google OAuth
-@st.cache_resource
-def get_authenticator():
-    return Authenticate(
-        secret_credentials_path='google_credentials.json',
-        cookie_name='voicesnap_auth',
-        cookie_key='voicesnap_secret_key_12345',
-        redirect_uri=config.GOOGLE_REDIRECT_URI
-    )
+# ============================================================================
+# AUTHLIB CONFIGURATION
+# ============================================================================
 
-# Session state
+def load_google_credentials():
+    """Load Google OAuth credentials"""
+    try:
+        credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        
+        if credentials_json:
+            return json.loads(credentials_json)
+        else:
+            with open('google_credentials.json', 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        st.error(f"❌ Failed to load Google OAuth credentials: {e}")
+        return None
+
+def get_authlib_oauth_session():
+    """Create AuthLib OAuth2 session for Google"""
+    credentials = load_google_credentials()
+    if not credentials:
+        return None
+    
+    try:
+        client_id = credentials['web']['client_id']
+        client_secret = credentials['web']['client_secret']
+        
+        session = OAuth2Session(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=config.GOOGLE_REDIRECT_URI,
+            scope=[
+                'openid',
+                'profile',
+                'email'
+            ]
+        )
+        return session
+    except Exception as e:
+        st.error(f"❌ Failed to create OAuth session: {e}")
+        return None
+
+# Session state initialization
 if 'user' not in st.session_state:
     st.session_state.user = None
 if 'in_call' not in st.session_state:
@@ -49,13 +85,73 @@ if 'current_room' not in st.session_state:
     st.session_state.current_room = None
 if 'room_url' not in st.session_state:
     st.session_state.room_url = None
+if 'auth_processed' not in st.session_state:
+    st.session_state.auth_processed = False
 
 # ============================================================================
-# GOOGLE OAUTH LOGIN
+# AUTHLIB OAUTH LOGIN
 # ============================================================================
+
+def get_google_auth_url():
+    """Generate Google OAuth authorization URL using AuthLib"""
+    session = get_authlib_oauth_session()
+    if not session:
+        return None
+    
+    try:
+        auth_uri, state = session.create_authorization_url(
+            'https://accounts.google.com/o/oauth2/v2/auth',
+            prompt='consent'
+        )
+        st.session_state.oauth_state = state
+        return auth_uri
+    except Exception as e:
+        st.error(f"❌ Failed to generate auth URL: {e}")
+        return None
+
+def exchange_code_for_token(code):
+    """Exchange authorization code for access token using AuthLib"""
+    try:
+        session = get_authlib_oauth_session()
+        if not session:
+            return None
+        
+        # Fetch token from Google
+        token = session.fetch_token(
+            'https://oauth2.googleapis.com/token',
+            code=code,
+            timeout=10
+        )
+        
+        if not token or 'access_token' not in token:
+            st.error("❌ Failed to obtain access token")
+            return None
+        
+        # Get user info from Google
+        user_info_response = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {token["access_token"]}'},
+            timeout=10
+        )
+        
+        if user_info_response.status_code == 200:
+            user_info = user_info_response.json()
+            return {
+                'id': user_info.get('id'),
+                'email': user_info.get('email'),
+                'name': user_info.get('name'),
+                'picture': user_info.get('picture')
+            }
+        else:
+            st.error(f"❌ Failed to fetch user info: {user_info_response.status_code}")
+            return None
+    
+    except Exception as e:
+        st.error(f"❌ Token exchange failed: {str(e)}")
+        return None
 
 def render_google_login():
-    """Google OAuth login screen"""
+    """Google OAuth login screen using AuthLib"""
     
     col1, col2, col3 = st.columns([1, 2, 1])
     
@@ -64,42 +160,93 @@ def render_google_login():
         <div style="text-align: center; padding: 50px 20px;">
             <h1 style="font-size: 56px; margin: 0;">🎙️</h1>
             <h1 style="font-size: 36px; margin: 10px 0;">VoiceSnap</h1>
-            <p style="font-size: 16px; color: #666; margin-bottom: 40px;">
+            <p style="font-size: 16px; color: #666; margin-bottom: 30px;">
                 Real-time audio hangouts for friends
             </p>
         </div>
         """, unsafe_allow_html=True)
         
-        st.markdown('<div class="header-card">', unsafe_allow_html=True)
-        st.markdown("### 🔐 Sign in with Google")
-        st.caption("Secure authentication • No password needed")
+        st.markdown("""
+        <div style="text-align: center; margin-top: -20px;">
+            <h3 style="margin: 0 0 5px 0; font-size: 20px;">🔐 Sign in with Google</h3>
+            <p style="margin: 0; font-size: 14px; color: #666;">Secure authentication • No password needed</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Google Sign In Button
-        authenticator = get_authenticator()
-        user_info = authenticator.login()
+        # Check for OAuth callback
+        query_params = st.query_params
         
-        if user_info:
-            # Extract Google profile info
-            email = user_info.get('email')
-            name = user_info.get('name', email.split('@')[0])
-            avatar_url = user_info.get('picture')
-            google_id = user_info.get('sub')
+        # Process auth code only once
+        if 'code' in query_params and not st.session_state.auth_processed:
+            # Mark as processed immediately to prevent re-processing
+            st.session_state.auth_processed = True
+            auth_code = query_params['code']
             
-            # Create/update user in database
-            user = db.create_user(
-                email=email,
-                name=name,
-                google_id=google_id,
-                avatar_url=avatar_url
-            )
+            with st.spinner("🔄 Authenticating with Google..."):
+                user_info = exchange_code_for_token(auth_code)
+                
+                if user_info:
+                    try:
+                        # Create/update user in database
+                        user = db.create_user(
+                            email=user_info['email'],
+                            name=user_info['name'],
+                            google_id=user_info['id'],
+                            avatar_url=user_info['picture']
+                        )
+                        
+                        if user:
+                            st.session_state.user = user
+                            
+                            # Clear query params BEFORE rerun
+                            st.query_params.clear()
+                            st.session_state.auth_processed = False
+                            
+                            st.success(f"✅ Welcome, {user_info['name']}!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ Failed to create user in database")
+                            st.session_state.auth_processed = False
+                    except Exception as e:
+                        st.error(f"❌ Database error: {e}")
+                        st.session_state.auth_processed = False
+                else:
+                    st.error("❌ Failed to authenticate. Please try again.")
+                    st.session_state.auth_processed = False
+        else:
+            # Show login button
+            auth_url = get_google_auth_url()
             
-            if user:
-                st.session_state.user = user
-                st.success(f"✅ Welcome, {name}!")
-                time.sleep(1)
-                st.rerun()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            if auth_url:
+                st.markdown(f"""
+                <a href="{auth_url}" target="_self">
+                    <button style="
+                        background-color: #4285F4;
+                        color: white;
+                        padding: 12px 24px;
+                        border: none;
+                        border-radius: 4px;
+                        font-size: 16px;
+                        cursor: pointer;
+                        width: 100%;
+                        font-weight: 600;
+                        margin-top: 10px;
+                    ">
+                        <span style="margin-right: 8px;">🔵</span> Sign in with Google
+                    </button>
+                </a>
+                """, unsafe_allow_html=True)
+            else:
+                st.error("❌ Google OAuth not configured properly")
+                st.info("""
+                **Setup Instructions:**
+                1. Go to https://console.cloud.google.com/
+                2. Create OAuth 2.0 credentials (OAuth 2.0 Client ID)
+                3. Add Authorized redirect URIs: `""" + config.GOOGLE_REDIRECT_URI + """`
+                4. Download JSON and save as `google_credentials.json`
+                5. Update OAuth consent screen app name to: **VoiceSnap**
+                """)
         
         st.markdown("""
         <p style="text-align: center; color: #666; font-size: 14px; margin-top: 20px;">
@@ -128,10 +275,9 @@ def render_main_interface():
     
     with col2:
         if st.button("🚪 Logout", use_container_width=True):
-            authenticator = get_authenticator()
-            authenticator.logout()
             st.session_state.user = None
             st.session_state.in_call = False
+            st.session_state.auth_processed = False
             st.rerun()
     
     # GLOBAL SEARCH BAR
@@ -183,11 +329,9 @@ def render_search_result(user):
         """, unsafe_allow_html=True)
     
     with col3:
-        # Check if already friends
         is_friend = db.is_friend(st.session_state.user['id'], user['id'])
         
         if is_friend:
-            # Can call directly
             if user.get('status') == 'available':
                 if st.button("📞 Call Now", key=f"call_{user['id']}", use_container_width=True, type="primary"):
                     start_call_with_user(user)
@@ -197,7 +341,6 @@ def render_search_result(user):
             else:
                 st.button("💤 Offline", key=f"off_{user['id']}", disabled=True, use_container_width=True)
         else:
-            # Add friend first
             if st.button("➕ Add Friend", key=f"add_{user['id']}", use_container_width=True):
                 if db.add_friend(st.session_state.user['id'], user['email']):
                     st.success(f"✅ Added {user['name']} as friend!")
@@ -290,10 +433,7 @@ def start_call_with_user(user):
             st.session_state.current_room = room['name']
             st.session_state.room_url = room['url']
             st.session_state.in_call = True
-            
-            # Update status
             db.update_user_status(st.session_state.user['id'], 'busy', room['name'])
-            
             st.rerun()
 
 def join_user_call(user):
@@ -302,9 +442,7 @@ def join_user_call(user):
         st.session_state.current_room = user['room_id']
         st.session_state.room_url = f"https://{user['room_id']}.daily.co/{user['room_id']}"
         st.session_state.in_call = True
-        
         db.update_user_status(st.session_state.user['id'], 'busy', user['room_id'])
-        
         st.rerun()
 
 def start_group_call(group):
@@ -316,9 +454,7 @@ def start_group_call(group):
             st.session_state.current_room = room['name']
             st.session_state.room_url = room['url']
             st.session_state.in_call = True
-            
             db.update_user_status(st.session_state.user['id'], 'busy', room['name'])
-            
             st.rerun()
 
 # ============================================================================
@@ -328,7 +464,6 @@ def start_group_call(group):
 def render_call_interface():
     """Active call interface"""
     
-    # Header with end button
     col1, col2 = st.columns([4, 1])
     
     with col1:
@@ -344,7 +479,6 @@ def render_call_interface():
         if st.button("📞 End Call", use_container_width=True, type="primary"):
             end_call()
     
-    # Daily.co iframe
     if st.session_state.room_url:
         try:
             token = daily.create_meeting_token(
@@ -377,10 +511,8 @@ def end_call():
     except:
         pass
     
-    # Update status
     db.update_user_status(st.session_state.user['id'], 'available', None)
     
-    # Clear state
     st.session_state.in_call = False
     st.session_state.current_room = None
     st.session_state.room_url = None
@@ -394,12 +526,10 @@ def end_call():
 # ============================================================================
 
 def main():
-    # Check API key
     if not config.DAILY_API_KEY:
         st.error("⚠️ Daily.co API key not configured!")
         st.stop()
     
-    # Route
     if not st.session_state.user:
         render_google_login()
     elif st.session_state.in_call:

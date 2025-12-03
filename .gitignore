@@ -3,7 +3,7 @@
 .env.local
 
 # Google OAuth credentials
-*.apps.googleusercontent.com.json
+google_credentials.json
 
 # Database
 voicesnap.db
