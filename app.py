@@ -3,7 +3,7 @@ import time
 from streamlit_google_auth import Authenticate
 from database import db
 from daily_api import daily
-from config import config
+from configurations import Config as config
 
 # Page config
 st.set_page_config(
