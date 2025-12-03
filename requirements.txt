@@ -7,8 +7,4 @@ pysqlite3
 typing
 datetime
 requests
-json
 daily_api
-urllib3
-certifi
-python-dateutil
