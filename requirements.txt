@@ -7,7 +7,6 @@ pysqlite3
 typing
 datetime
 requests
-os
 json
 daily_api
 urllib3
